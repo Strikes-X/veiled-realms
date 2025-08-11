@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Custom Map</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        .app-container {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        #mapCanvas {
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            background-color: #161b22;
+            cursor: grab;
+            touch-action: none;
+            max-width: 100%;
+            max-height: 80vh;
+        }
+        #mapCanvas:active {
+            cursor: grabbing;
+        }
+        .info-box {
+            position: absolute;
+            background: rgba(22, 27, 34, 0.9);
+            backdrop-filter: blur(8px);
+            border: 1px solid #30363d;
+            border-radius: 0.75rem;
+            padding: 1rem;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+            max-width: 300px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease-in-out;
+            z-index: 10;
+        }
+        .info-box.visible {
+            opacity: 1;
+        }
+        .info-box h3 {
+            font-weight: 600;
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+            color: #58a6ff;
+        }
+        .info-box p {
+            font-size: 0.875rem;
+            color: #8b949e;
+        }
+        .close-btn {
+            background-color: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .close-btn:hover {
+            background-color: #30363d;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200">
+    <div class="app-container p-4">
+        <!-- Title and description -->
+        <div class="text-center mb-6">
+            <h1 class="text-4xl font-extrabold text-blue-400 drop-shadow-lg">Custom Interactive Map</h1>
+            <p class="mt-2 text-lg text-gray-400 max-w-xl">
+                Explore the map by panning and zooming with your mouse or touch. Click on markers to see more information.
+            </p>
+        </div>
+
+        <!-- The main canvas for the map -->
+        <canvas id="mapCanvas" class="w-full h-auto"></canvas>
+
+        <!-- Container for controls -->
+        <div class="flex flex-col sm:flex-row gap-4 mt-6">
+            <button id="resetButton" class="close-btn font-semibold shadow-md">Reset View</button>
+        </div>
+
+        <!-- Custom info box/modal for markers -->
+        <div id="infoBox" class="info-box">
+            <h3 id="infoTitle"></h3>
+            <p id="infoDescription"></p>
+        </div>
+    </div>
+
+    <script>
+        // --- MAP CONFIGURATION ---
+        // You can easily change these values to load your own map.
+        const MAP_IMAGE_URL = 'https://app.legendkeeper.com/a/worlds/ckf3zw0eddbz70756cz07hu15/clmv4m6ci0002033ctnpekezl/';
+        const POINTS_OF_INTEREST = [
+            { id: 1, x: 0.2, y: 0.3, name: 'Main City', description: 'The bustling center of the map.' },
+            { id: 2, x: 0.7, y: 0.5, name: 'Mystic Forest', description: 'A dense and ancient forest.' },
+            { id: 3, x: 0.4, y: 0.8, name: 'Mountain Peak', description: 'The highest point in the region.' }
+        ];
+
+        // --- GLOBAL VARIABLES & INITIALIZATION ---
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const mapImage = new Image();
+        const resetButton = document.getElementById('resetButton');
+        const infoBox = document.getElementById('infoBox');
+        const infoTitle = document.getElementById('infoTitle');
+        const infoDescription = document.getElementById('infoDescription');
+
+        let isDragging = false;
+        let lastX = 0;
+        let lastY = 0;
+        let scale = 1;
+        let offsetX = 0;
+        let offsetY = 0;
+        let mapWidth = 0;
+        let mapHeight = 0;
+        let isAnimating = false; // Flag to prevent interaction during animation
+
+        // --- FUNCTIONS ---
+        // Function to draw everything on the canvas
+        function draw() {
+            // Clear the canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Save the current canvas state
+            ctx.save();
+
+            // Translate and scale the canvas
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+
+            // Draw the map image
+            ctx.drawImage(mapImage, 0, 0, mapWidth, mapHeight);
+
+            // Draw the points of interest
+            POINTS_OF_INTEREST.forEach(poi => {
+                const markerX = poi.x * mapWidth;
+                const markerY = poi.y * mapHeight;
+
+                // Draw a simple circle marker
+                ctx.beginPath();
+                ctx.arc(markerX, markerY, 15, 0, 2 * Math.PI);
+                ctx.fillStyle = 'rgba(88, 166, 255, 0.7)';
+                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#c9d1d9';
+                ctx.stroke();
+                ctx.closePath();
+            });
+
+            // Restore the canvas state
+            ctx.restore();
+        }
+
+        // Function to handle canvas resizing
+        function resizeCanvas() {
+            const container = canvas.parentNode;
+            const aspectRatio = mapImage.width / mapImage.height;
+            let newWidth = container.clientWidth;
+            let newHeight = newWidth / aspectRatio;
+
+            // Ensure the canvas doesn't exceed the viewport height
+            if (newHeight > window.innerHeight * 0.8) {
+                newHeight = window.innerHeight * 0.8;
+                newWidth = newHeight * aspectRatio;
+            }
+
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            mapWidth = canvas.width;
+            mapHeight = canvas.height;
+
+            // Recalculate offsets to keep the map centered after resize
+            offsetX = (canvas.width - mapWidth * scale) / 2;
+            offsetY = (canvas.height - mapHeight * scale) / 2;
+
+            draw();
+        }
+        
+        // Function for smooth animation to a specific point and scale
+        function animateToPoint(targetX, targetY, targetScale, callback) {
+            if (isAnimating) return;
+            isAnimating = true;
+            hideInfoBox();
+
+            // Store starting values for interpolation
+            const startScale = scale;
+            const startOffsetX = offsetX;
+            const startOffsetY = offsetY;
+            
+            // Calculate target offsets
+            const targetOffsetX = (canvas.width / 2) - (targetX * targetScale);
+            const targetOffsetY = (canvas.height / 2) - (targetY * targetScale);
+
+            const duration = 500; // Animation duration in milliseconds
+            let startTime = null;
+
+            function animate(timestamp) {
+                if (!startTime) startTime = timestamp;
+                const progress = timestamp - startTime;
+
+                const t = Math.min(progress / duration, 1); // Clamp progress between 0 and 1
+                const easedT = 0.5 - Math.cos(t * Math.PI) / 2; // Ease-in-out function
+
+                // Interpolate current values
+                scale = startScale + (targetScale - startScale) * easedT;
+                offsetX = startOffsetX + (targetOffsetX - startOffsetX) * easedT;
+                offsetY = startOffsetY + (targetOffsetY - startOffsetY) * easedT;
+
+                draw();
+
+                if (t < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    isAnimating = false;
+                    if (callback) callback();
+                }
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+
+        // --- EVENT HANDLERS ---
+        // Handle mouse down event
+        function onMouseDown(e) {
+            if (isAnimating) return;
+            isDragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            canvas.style.cursor = 'grabbing';
+        }
+
+        // Handle mouse move event
+        function onMouseMove(e) {
+            if (!isDragging || isAnimating) return;
+
+            const deltaX = e.clientX - lastX;
+            const deltaY = e.clientY - lastY;
+            offsetX += deltaX;
+            offsetY += deltaY;
+            lastX = e.clientX;
+            lastY = e.clientY;
+
+            draw();
+        }
+
+        // Handle mouse up event
+        function onMouseUp(e) {
+            isDragging = false;
+            canvas.style.cursor = 'grab';
+        }
+
+        // Handle mouse wheel event for zooming
+        function onMouseWheel(e) {
+            if (isAnimating) return;
+            e.preventDefault();
+
+            const scaleFactor = 1.1;
+            const newScale = e.deltaY > 0 ? scale / scaleFactor : scale * scaleFactor;
+            
+            // Limit zoom
+            if (newScale < 0.5 || newScale > 5) return;
+
+            // Calculate mouse position relative to canvas
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // Adjust offsets to zoom around the mouse cursor
+            offsetX -= mouseX * (newScale / scale - 1);
+            offsetY -= mouseY * (newScale / scale - 1);
+            scale = newScale;
+
+            draw();
+        }
+
+        // Handle click event for markers
+        function onMapClick(e) {
+            if (isAnimating) return;
+            const rect = canvas.getBoundingClientRect();
+            const clickX = (e.clientX - rect.left - offsetX) / scale;
+            const clickY = (e.clientY - rect.top - offsetY) / scale;
+
+            POINTS_OF_INTEREST.forEach(poi => {
+                // Map the POI coordinates to the image's original dimensions
+                const markerX = poi.x * mapImage.width;
+                const markerY = poi.y * mapImage.height;
+                
+                // Check if click is inside the marker circle (circle radius = 15)
+                const distance = Math.sqrt((clickX - markerX) ** 2 + (clickY - markerY) ** 2);
+                if (distance < 15) {
+                    const targetMapX = poi.x * mapImage.width * scale;
+                    const targetMapY = poi.y * mapImage.height * scale;
+                    const targetScale = 2.0; // Zoom in 2x
+                    const finalMarkerX = poi.x * mapWidth;
+                    const finalMarkerY = poi.y * mapHeight;
+
+                    animateToPoint(finalMarkerX, finalMarkerY, targetScale, () => {
+                         // Show info box after animation completes
+                        // Position info box near the center of the viewport
+                        showInfoBox(poi, canvas.width / 2, canvas.height / 2);
+                    });
+                }
+            });
+        }
+
+        // Show the info box with marker details
+        function showInfoBox(poi, clientX, clientY) {
+            infoTitle.textContent = poi.name;
+            infoDescription.textContent = poi.description;
+            
+            // Position the info box near the click location
+            infoBox.style.left = `${clientX + 10}px`;
+            infoBox.style.top = `${clientY + 10}px`;
+            infoBox.classList.add('visible');
+        }
+
+        // Hide the info box
+        function hideInfoBox() {
+            infoBox.classList.remove('visible');
+        }
+
+        // --- TOUCH EVENTS ---
+        let lastPinchDist = 0;
+        let lastTouchX = 0;
+        let lastTouchY = 0;
+
+        function onTouchStart(e) {
+            if (isAnimating) return;
+            if (e.touches.length === 1) {
+                isDragging = true;
+                lastTouchX = e.touches[0].clientX;
+                lastTouchY = e.touches[0].clientY;
+            } else if (e.touches.length === 2) {
+                lastPinchDist = getPinchDistance(e.touches[0], e.touches[1]);
+            }
+        }
+
+        function onTouchMove(e) {
+            if (isAnimating) return;
+            e.preventDefault();
+            if (e.touches.length === 1 && isDragging) {
+                const deltaX = e.touches[0].clientX - lastTouchX;
+                const deltaY = e.touches[0].clientY - lastTouchY;
+                offsetX += deltaX;
+                offsetY += deltaY;
+                lastTouchX = e.touches[0].clientX;
+                lastTouchY = e.touches[0].clientY;
+                draw();
+            } else if (e.touches.length === 2) {
+                const newPinchDist = getPinchDistance(e.touches[0], e.touches[1]);
+                const scaleFactor = newPinchDist / lastPinchDist;
+
+                const newScale = scale * scaleFactor;
+                if (newScale < 0.5 || newScale > 5) return;
+
+                const rect = canvas.getBoundingClientRect();
+                const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+
+                offsetX -= centerX * (newScale / scale - 1);
+                offsetY -= centerY * (newScale / scale - 1);
+                scale = newScale;
+                lastPinchDist = newPinchDist;
+                draw();
+            }
+        }
+
+        function onTouchEnd(e) {
+            isDragging = false;
+        }
+
+        function getPinchDistance(t1, t2) {
+            const dx = t1.clientX - t2.clientX;
+            const dy = t1.clientY - t2.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // --- MAIN LOGIC ---
+        // Load the map image and start the application
+        mapImage.onload = () => {
+            // Initial canvas size and drawing
+            resizeCanvas();
+
+            // Add event listeners for mouse interaction
+            canvas.addEventListener('mousedown', onMouseDown);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('mouseleave', onMouseUp); // End drag if mouse leaves canvas
+            canvas.addEventListener('wheel', onMouseWheel);
+            canvas.addEventListener('click', onMapClick);
+
+            // Add event listeners for touch interaction
+            canvas.addEventListener('touchstart', onTouchStart);
+            canvas.addEventListener('touchmove', onTouchMove);
+            canvas.addEventListener('touchend', onTouchEnd);
+
+            // Hide the info box if clicking outside the markers
+            document.addEventListener('click', (e) => {
+                if (!infoBox.contains(e.target) && e.target !== canvas) {
+                    hideInfoBox();
+                }
+            });
+            
+            // Resize canvas on window resize
+            window.addEventListener('resize', resizeCanvas);
+        };
+
+        // Handle the reset button click
+        resetButton.addEventListener('click', () => {
+            // Animate back to the original view
+            animateToPoint(mapWidth / 2, mapHeight / 2, 1, hideInfoBox);
+        });
+
+        // Set the source of the map image to load it
+        mapImage.src = MAP_IMAGE_URL;
+
+    </script>
+</body>
+</html>
